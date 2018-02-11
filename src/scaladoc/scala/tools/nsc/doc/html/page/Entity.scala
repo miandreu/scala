@@ -237,7 +237,7 @@ trait EntityPage extends HtmlPage {
             <span class="filtertype">Ordering</span>
             <ol>
               {
-                if (!universe.settings.docGroups.value || (tpl.members.map(_.group).distinct.length == 1))
+                if (!universe.settings.docGroups.value || tpl.members.map(_.group).distinct.forall(_ == ModelFactory.defaultGroup))
                   NodeSeq.Empty
                 else
                   <li class="group out"><span>Grouped</span></li>
@@ -352,7 +352,7 @@ trait EntityPage extends HtmlPage {
           NodeSeq fromSeq (for ((superTpl, superType) <- (tpl.linearizationTemplates zip tpl.linearizationTypes)) yield
             <div class="parent" name={ superTpl.qualifiedName }>
               <h3>Inherited from {
-                typeToHtmlWithStupidTypes(tpl, superTpl, superType)
+                typeToHtml(superType, hasLinks = true)
               }</h3>
             </div>
           )
@@ -394,7 +394,7 @@ trait EntityPage extends HtmlPage {
 
       {
         if (Set("epfl", "EPFL").contains(tpl.universe.settings.docfooter.value))
-          <div id="footer">Scala programming documentation. Copyright (c) 2003-2017 <a href="http://www.epfl.ch" target="_top">EPFL</a>, with contributions from <a href="http://www.lightbend.com" target="_top">Lightbend</a>.</div>
+          <div id="footer">Scala programming documentation. Copyright (c) 2003-2018 <a href="http://www.epfl.ch" target="_top">EPFL</a>, with contributions from <a href="http://www.lightbend.com" target="_top">Lightbend</a>.</div>
         else
           <div id="footer"> { tpl.universe.settings.docfooter.value } </div>
       }
@@ -697,7 +697,7 @@ trait EntityPage extends HtmlPage {
                  exampleXml.reduceLeft(_ ++ Text(", ") ++ _)
               }</ol>
             </div>
-	        }
+          }
 
         val version: NodeSeq =
           orEmpty(comment.version) {
@@ -1064,18 +1064,6 @@ trait EntityPage extends HtmlPage {
     case comment.Paragraph(in) => Page.inlineToStr(in)
     case _ => block.toString
   }
-
-  private def typeToHtmlWithStupidTypes(tpl: TemplateEntity, superTpl: TemplateEntity, superType: TypeEntity): NodeSeq =
-    if (tpl.universe.settings.useStupidTypes.value)
-      superTpl match {
-        case dtpl: DocTemplateEntity =>
-          val sig = signature(dtpl, isSelf = false, isReduced = true) \ "_"
-          sig
-        case tpl: TemplateEntity =>
-          Text(tpl.name)
-      }
-  else
-    typeToHtml(superType, hasLinks = true)
 
   private def constraintToHtml(constraint: Constraint): NodeSeq = constraint match {
     case ktcc: KnownTypeClassConstraint =>

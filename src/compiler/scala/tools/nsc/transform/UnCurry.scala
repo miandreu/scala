@@ -81,7 +81,7 @@ abstract class UnCurry extends InfoTransform
     private def mustExpandFunction(fun: Function) = {
       // (TODO: Can't use isInterface, yet, as it hasn't been updated for the new trait encoding)
       val canUseLambdaMetaFactory = (fun.attachments.get[SAMFunction] match {
-        case Some(SAMFunction(userDefinedSamTp, sam)) =>
+        case Some(SAMFunction(userDefinedSamTp, sam, _)) =>
           // LambdaMetaFactory cannot mix in trait members for us, or instantiate classes -- only pure interfaces need apply
           erasure.compilesToPureInterface(erasure.javaErasure(userDefinedSamTp).typeSymbol) &&
           // impl restriction -- we currently use the boxed apply, so not really useful to allow specialized sam types (https://github.com/scala/scala/pull/4971#issuecomment-198119167)
@@ -319,7 +319,7 @@ abstract class UnCurry extends InfoTransform
         args.take(formals.length - 1) :+ (suffix setType formals.last)
       }
 
-      val args1 = if (isVarArgTypes(formals)) transformVarargs(formals.last.typeArgs.head) else args
+      val args1 = if (isVarArgTypes(formals)) transformVarargs(formals.last.typeArgs.head.widen) else args
 
       map2(formals, args1) { (formal, arg) =>
         if (!isByNameParamType(formal)) arg
@@ -588,7 +588,7 @@ abstract class UnCurry extends InfoTransform
           val literalRhsIfConst =
             if (newParamss.head.isEmpty) { // We know newParamss.length == 1 from above
               ddSym.info.resultType match {
-                case tp@ConstantType(value) => Literal(value) setType tp setPos newRhs.pos // inlining of gen.mkAttributedQualifier(tp)
+                case tp@FoldableConstantType(value) => Literal(value) setType tp setPos newRhs.pos // inlining of gen.mkAttributedQualifier(tp)
                 case _ => newRhs
               }
             } else newRhs

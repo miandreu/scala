@@ -86,7 +86,7 @@ object ScalaOptionParser {
     "-Xno-forwarders", "-Xno-patmat-analysis", "-Xno-uescape", "-Xnojline", "-Xprint-pos", "-Xprint-types", "-Xprompt", "-Xresident", "-Xshow-phases", "-Xstrict-inference", "-Xverify", "-Y",
     "-Ybreak-cycles", "-Ydebug", "-Ycompact-trees", "-YdisableFlatCpCaching", "-Ydoc-debug",
     "-Yide-debug", "-Yinfer-argument-types",
-    "-Yissue-debug", "-Ylog-classpath", "-Ymacro-debug-lite", "-Ymacro-debug-verbose", "-Ymacro-no-expand",
+    "-Yissue-debug", "-Yliteral-types", "-Ylog-classpath", "-Ymacro-debug-lite", "-Ymacro-debug-verbose", "-Ymacro-no-expand",
     "-Yno-completion", "-Yno-generic-signatures", "-Yno-imports", "-Yno-predef",
     "-Yoverride-objects", "-Yoverride-vars", "-Ypatmat-debug", "-Yno-adapted-args", "-Ypartial-unification", "-Ypos-debug", "-Ypresentation-debug",
     "-Ypresentation-strict", "-Ypresentation-verbose", "-Yquasiquote-debug", "-Yrangepos", "-Yreify-copypaste", "-Yreify-debug", "-Yrepl-class-based",
@@ -119,7 +119,7 @@ object ScalaOptionParser {
   private def scalaStringSettingNames = List("-i", "-e")
   private def scalaBooleanSettingNames = List("-nc", "-save")
 
-  private def scalaDocBooleanSettingNames = List("-Yuse-stupid-types", "-implicits", "-implicits-debug", "-implicits-show-all", "-implicits-sound-shadowing", "-implicits-hide", "-author", "-diagrams", "-diagrams-debug", "-raw-output", "-no-prefixes", "-no-link-warnings", "-expand-all-types", "-groups")
+  private def scalaDocBooleanSettingNames = List("-implicits", "-implicits-debug", "-implicits-show-all", "-implicits-sound-shadowing", "-implicits-hide", "-author", "-diagrams", "-diagrams-debug", "-raw-output", "-no-prefixes", "-no-link-warnings", "-expand-all-types", "-groups")
   private def scalaDocIntSettingNames = List("-diagrams-max-classes", "-diagrams-max-implicits", "-diagrams-dot-timeout", "-diagrams-dot-restart")
   private def scalaDocChoiceSettingNames = Map("-doc-format" -> List("html"))
   private def scaladocStringSettingNames = List("-doc-title", "-doc-version", "-doc-footer", "-doc-no-compile", "-doc-source-url", "-doc-generator", "-skip-packages")

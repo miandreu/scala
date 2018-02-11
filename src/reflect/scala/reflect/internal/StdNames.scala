@@ -256,11 +256,11 @@ trait StdNames {
     final val Singleton: NameType       = "Singleton"
     final val Throwable: NameType       = "Throwable"
     final val unchecked: NameType       = "unchecked"
+    final val ValueOf: NameType         = "ValueOf"
 
     final val api: NameType                 = "api"
     final val Annotation: NameType          = "Annotation"
     final val CaseDef: NameType             = "CaseDef"
-    final val ClassfileAnnotation: NameType = "ClassfileAnnotation"
     final val ClassManifest: NameType       = "ClassManifest"
     final val Enum: NameType                = "Enum"
     final val Group: NameType               = "Group"
@@ -268,6 +268,7 @@ trait StdNames {
     final val Liftable: NameType            = "Liftable"
     final val Unliftable: NameType          = "Unliftable"
     final val Name: NameType                = "Name"
+    final val StaticAnnotation: NameType    = "StaticAnnotation"
     final val Tree: NameType                = "Tree"
     final val Text: NameType                = "Text"
     final val TermName: NameType            = "TermName"
@@ -334,6 +335,7 @@ trait StdNames {
     val QUAL_PREFIX                    = "qual$"
     val NAMEDARG_PREFIX                = "x$"
     val RIGHT_ASSOC_OP_PREFIX          = "rassoc$"
+    val STABILIZER_PREFIX              = "stabilizer$"
 
     // Compiler internal names
     val ANYname: NameType                  = "<anyname>"

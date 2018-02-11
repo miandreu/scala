@@ -299,7 +299,8 @@ trait NamesDefaults { self: Analyzer =>
               //      which is important for (at least) macros.
               arg.tpe
             }
-          ).widen // have to widen or types inferred from literal defaults will be singletons
+          )
+
           val s = context.owner.newValue(unit.freshTermName(nme.NAMEDARG_PREFIX), arg.pos, newFlags = ARTIFACT) setInfo {
             val tp = if (byName) functionType(Nil, argTpe) else argTpe
             uncheckedBounds(tp)
@@ -478,9 +479,8 @@ trait NamesDefaults { self: Analyzer =>
         if (param.owner.owner.isClass) {
           param.owner.owner.info.member(defGetterName)
         } else {
-          // the owner of the method is another method. find the default
-          // getter in the context.
-          context.lookup(defGetterName, param.owner.owner)
+          // the owner of the method is another method. find the default getter in the context.
+          context.lookupSibling(param.owner, defGetterName)
         }
       }
     } else NoSymbol

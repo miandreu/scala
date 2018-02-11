@@ -95,7 +95,6 @@ trait Types
   /** In case anyone wants to turn on type parameter bounds being used
    *  to seed type constraints.
    */
-  private final val propagateParameterBoundsToTypeVars = System.getProperty("scalac.debug.prop-constraints") != null
   private final val sharperSkolems = System.getProperty("scalac.experimental.sharper-skolems") != null
 
   /** Caching the most recent map has a 75-90% hit rate. */
@@ -1871,22 +1870,54 @@ trait Types
   class PackageClassInfoType(decls: Scope, clazz: Symbol)
   extends ClassInfoType(List(), decls, clazz)
 
-  /** A class representing a constant type.
+  /** A class representing a constant type. A constant type is either the inferred type of a constant
+   *  value or an explicit or inferred literal type. Both may be constant folded at the type level,
+   *  however literal types are not folded at the term level and do not elide effects.
    */
-  abstract case class ConstantType(value: Constant) extends SingletonType with ConstantTypeApi {
-    override def underlying: Type = value.tpe
-    assert(underlying.typeSymbol != UnitClass)
+  abstract class ConstantType extends SingletonType with ConstantTypeApi {
+    //assert(underlying.typeSymbol != UnitClass)
+    val value: Constant
+
     override def isTrivial: Boolean = true
-    override def deconst: Type = underlying.deconst
-    override def safeToString: String =
-      underlying.toString + "(" + value.escapedStringValue + ")"
     override def kind = "ConstantType"
   }
 
-  final class UniqueConstantType(value: Constant) extends ConstantType(value)
-
   object ConstantType extends ConstantTypeExtractor {
+    def apply(c: Constant): ConstantType = FoldableConstantType(c)
+    def unapply(tpe: ConstantType): Option[Constant] = Some(tpe.value)
+  }
+
+  /** A class representing the inferred type of a constant value. Constant types and their
+   *  corresponding terms are constant-folded during type checking. To avoid constant folding, use
+   *  the type returned by `deconst` instead.
+   */
+  abstract case class FoldableConstantType(value: Constant) extends ConstantType {
+    override def underlying: Type =
+      if (value.isSuitableLiteralType) LiteralType(value) else value.tpe
+    override def deconst: Type = underlying.deconst
+    override def safeToString: String = underlying.widen.toString + "(" + value.escapedStringValue + ")"
+  }
+
+  final class UniqueConstantType(value: Constant) extends FoldableConstantType(value)
+
+  object FoldableConstantType {
     def apply(value: Constant) = unique(new UniqueConstantType(value))
+  }
+
+  /** A class representing an explicit or inferred literal type. Literal types may be be folded at
+   *  at the type level during type checking, however they will not be folded at the term level and
+   *  effects will not be elided.
+   */
+  abstract case class LiteralType(value: Constant) extends ConstantType {
+    override def underlying: Type = value.tpe
+    override def deconst: Type = this
+    override def safeToString: String = value.escapedStringValue
+  }
+
+  final class UniqueLiteralType(value: Constant) extends LiteralType(value)
+
+  object LiteralType {
+    def apply(value: Constant) = unique(new UniqueLiteralType(value))
   }
 
   /* Syncnote: The `volatile` var and `pendingVolatiles` mutable set need not be protected
@@ -2573,7 +2604,7 @@ trait Types
       if (isTrivial || phase.erasedTypes) resultType
       else if (/*isDependentMethodType &&*/ sameLength(actuals, params)) {
         val idm = new InstantiateDependentMap(params, actuals)
-        val res = idm(resultType)
+        val res = idm(resultType).deconst
         existentialAbstraction(idm.existentialsNeeded, res)
       }
       else existentialAbstraction(params, resultType)
@@ -2979,6 +3010,8 @@ trait Types
       value
     }
 
+    def precludesWidening(tp: Type) = tp.isStable || tp.typeSymbol.isSubClass(SingletonClass)
+
     /** Create a new TypeConstraint based on the given symbol.
      */
     private def deriveConstraint(tparam: Symbol): TypeConstraint = {
@@ -2987,20 +3020,29 @@ trait Types
        *  See scala/bug#5359.
        */
       val bounds  = tparam.info.bounds
+
       /* We can seed the type constraint with the type parameter
        * bounds as long as the types are concrete.  This should lower
        * the complexity of the search even if it doesn't improve
        * any results.
        */
-      if (propagateParameterBoundsToTypeVars) {
-        val exclude = bounds.isEmptyBounds || (bounds exists typeIsNonClassType)
+      val constr =
+        if (!isPastTyper) {
+          // Test for typer phase is questionable, however, if it isn't present bounds will be created
+          // during patmat and this causes an SOE compiling test/files/pos/t9018.scala. TypeVars are
+          // Supposed to have been eliminated by the typer anyway, so it's unclear why we reach this
+          // point during patmat.
+          val exclude = bounds.isEmptyBounds || (bounds exists typeIsNonClassType)
 
-        if (exclude) new TypeConstraint
-        else TypeVar.trace("constraint", "For " + tparam.fullLocationString)(
-          new TypeConstraint(bounds)
-        )
-      }
-      else new TypeConstraint
+          if (exclude) new TypeConstraint
+          else TypeVar.trace("constraint", "For " + tparam.fullLocationString)(
+            new TypeConstraint(bounds))
+        }
+        else new TypeConstraint
+
+      if (precludesWidening(bounds.hi)) constr.stopWidening()
+
+      constr
     }
     def untouchable(tparam: Symbol): TypeVar                 = createTypeVar(tparam, untouchable = true)
     def apply(tparam: Symbol): TypeVar                       = createTypeVar(tparam, untouchable = false)
@@ -3252,12 +3294,14 @@ trait Types
        *  }}}
        */
       def unifySimple = {
-        val sym = tp.typeSymbol
-        if (sym == NothingClass || sym == AnyClass) { // kind-polymorphic
-          // scala/bug#7126 if we register some type alias `T=Any`, we can later end
-          // with malformed types like `T[T]` during type inference in
-          // `handlePolymorphicCall`. No such problem if we register `Any`.
-          addBound(sym.tpe)
+        // scala/bug#7126 if we register some type alias `T=Any`, we can later end
+        // with malformed types like `T[T]` during type inference in
+        // `handlePolymorphicCall`. No such problem if we register `Any`.
+        if (typeIsNothing(tp)) { // kind-polymorphic
+          addBound(NothingTpe)
+          true
+        } else if(typeIsAny(tp)) { // kind-polymorphic
+          addBound(AnyTpe)
           true
         } else if (params.isEmpty) {
           addBound(tp)
@@ -3273,44 +3317,49 @@ trait Types
        *  type parameter we're trying to infer (the result will be sanity-checked later).
        */
       def unifyFull(tpe: Type): Boolean = {
+        def unifiableKinds(lhs: List[Symbol], rhs: List[Symbol]): Boolean =
+          sameLength(lhs, rhs) && !exists2(lhs, rhs)((l, r) => !unifiableKinds(l.typeParams, r.typeParams))
+
         def unifySpecific(tp: Type) = {
           val tpTypeArgs = tp.typeArgs
-          val arityDelta = compareLengths(typeArgs, tpTypeArgs)
-          if (arityDelta == 0) {
-            val lhs = if (isLowerBound) tpTypeArgs else typeArgs
-            val rhs = if (isLowerBound) typeArgs else tpTypeArgs
-            // This is a higher-kinded type var with same arity as tp.
-            // If so (see scala/bug#7517), side effect: adds the type constructor itself as a bound.
-            isSubArgs(lhs, rhs, params, AnyDepth) && {addBound(tp.typeConstructor); true}
-          } else if (settings.YpartialUnification && arityDelta < 0 && typeArgs.nonEmpty) {
-            // Simple algorithm as suggested by Paul Chiusano in the comments on scala/bug#2712
-            //
-            //   https://github.com/scala/bug/issues/2712#issuecomment-292374655
-            //
-            // Treat the type constructor as curried and partially applied, we treat a prefix
-            // as constants and solve for the suffix. For the example in the ticket, unifying
-            // M[A] with Int => Int this unifies as,
-            //
-            //   M[t] = [t][Int => t]  --> abstract on the right to match the expected arity
-            //   A = Int               --> capture the remainder on the left
-            //
-            // A more "natural" unifier might be M[t] = [t][t => t]. There's lots of scope for
-            // experimenting with alternatives here.
-            val numCaptured = tpTypeArgs.length - typeArgs.length
-            val (captured, abstractedArgs) = tpTypeArgs.splitAt(numCaptured)
+          val numCaptured = tpTypeArgs.length - typeArgs.length
+          val tpSym = tp.typeSymbolDirect
+          val abstractedTypeParams = tpSym.typeParams.drop(numCaptured)
+          if(!unifiableKinds(typeSymbolDirect.typeParams, abstractedTypeParams)) false
+          else {
+            if (numCaptured == 0) {
+              val lhs = if (isLowerBound) tpTypeArgs else typeArgs
+              val rhs = if (isLowerBound) typeArgs else tpTypeArgs
+              // This is a higher-kinded type var with same arity as tp.
+              // If so (see scala/bug#7517), side effect: adds the type constructor itself as a bound.
+              isSubArgs(lhs, rhs, params, AnyDepth) && {addBound(tp.typeConstructor); true}
+            } else if (settings.YpartialUnification && numCaptured > 0) {
+              // Simple algorithm as suggested by Paul Chiusano in the comments on scala/bug#2712
+              //
+              //   https://github.com/scala/bug/issues/2712#issuecomment-292374655
+              //
+              // Treat the type constructor as curried and partially applied, we treat a prefix
+              // as constants and solve for the suffix. For the example in the ticket, unifying
+              // M[A] with Int => Int this unifies as,
+              //
+              //   M[t] = [t][Int => t]  --> abstract on the right to match the expected arity
+              //   A = Int               --> capture the remainder on the left
+              //
+              // A more "natural" unifier might be M[t] = [t][t => t]. There's lots of scope for
+              // experimenting with alternatives here.
+              val (captured, abstractedArgs) = tpTypeArgs.splitAt(numCaptured)
 
-            val (lhs, rhs) =
-              if (isLowerBound) (abstractedArgs, typeArgs)
-              else (typeArgs, abstractedArgs)
+              val (lhs, rhs) =
+                if (isLowerBound) (abstractedArgs, typeArgs)
+                else (typeArgs, abstractedArgs)
 
-            isSubArgs(lhs, rhs, params, AnyDepth) && {
-              val tpSym = tp.typeSymbolDirect
-              val abstractedTypeParams = tpSym.typeParams.drop(numCaptured).map(_.cloneSymbol(tpSym))
-
-              addBound(PolyType(abstractedTypeParams, appliedType(tp.typeConstructor, captured ++ abstractedTypeParams.map(_.tpeHK))))
-              true
-            }
-          } else false
+              isSubArgs(lhs, rhs, params, AnyDepth) && {
+                val clonedParams = abstractedTypeParams.map(_.cloneSymbol(tpSym))
+                addBound(PolyType(clonedParams, appliedType(tp.typeConstructor, captured ++ clonedParams.map(_.tpeHK))))
+                true
+              }
+            } else false
+          }
         }
         // The type with which we can successfully unify can be hidden
         // behind singleton types and type aliases.
@@ -4133,12 +4182,13 @@ trait Types
         throw new MatchError((tp1, tp2))
     }
 
-    def check(tp1: Type, tp2: Type) = (
-      if (tp1.typeSymbol.isClass && tp1.typeSymbol.hasFlag(FINAL))
-        tp1 <:< tp2 || isNumericValueClass(tp1.typeSymbol) && isNumericValueClass(tp2.typeSymbol)
+    def check(tp1: Type, tp2: Type) = {
+      val sym1 = tp1.typeSymbol
+      if (sym1.isClass && sym1.hasFlag(FINAL) && sym1 != SingletonClass)
+        tp1 <:< tp2 || isNumericValueClass(sym1) && isNumericValueClass(tp2.typeSymbol)
       else tp1.baseClasses forall (bc =>
         tp2.baseTypeIndex(bc) < 0 || isConsistent(tp1.baseType(bc), tp2.baseType(bc)))
-    )
+    }
 
     check(tp1, tp2) && check(tp2, tp1)
   }
@@ -4203,16 +4253,17 @@ trait Types
   def isErrorOrWildcard(tp: Type) = (tp eq ErrorType) || (tp eq WildcardType)
 
   /** This appears to be equivalent to tp.isInstanceof[SingletonType],
-   *  except it excludes ConstantTypes.
+   *  except it excludes FoldableConstantTypes.
    */
   def isSingleType(tp: Type) = tp match {
     case ThisType(_) | SuperType(_, _) | SingleType(_, _) => true
+    case LiteralType(_)                                   => true
     case _                                                => false
   }
 
   def isConstantType(tp: Type) = tp match {
-    case ConstantType(_) => true
-    case _               => false
+    case FoldableConstantType(_) => true
+    case _                       => false
   }
 
   def isExistentialType(tp: Type): Boolean = tp match {
@@ -4851,8 +4902,23 @@ trait Types
   private[scala] val boundsContainType = (bounds: TypeBounds, tp: Type) => bounds containsType tp
   private[scala] val typeListIsEmpty = (ts: List[Type]) => ts.isEmpty
   private[scala] val typeIsSubTypeOfSerializable = (tp: Type) => tp <:< SerializableTpe
-  private[scala] val typeIsNothing = (tp: Type) => tp.typeSymbolDirect eq NothingClass
-  private[scala] val typeIsAny = (tp: Type) => tp.typeSymbolDirect eq AnyClass
+
+  @tailrec
+  private[scala] final def typeIsNothing(tp: Type): Boolean =
+    tp.dealias match {
+      case PolyType(_, tp) => typeIsNothing(tp)
+      case TypeRef(_, NothingClass, _) => true
+      case _ => false
+    }
+
+  @tailrec
+  private[scala] final def typeIsAny(tp: Type): Boolean =
+    tp.dealias match {
+      case PolyType(_, tp) => typeIsAny(tp)
+      case TypeRef(_, AnyClass, _) => true
+      case _ => false
+    }
+
   private[scala] val typeIsHigherKinded = (tp: Type) => tp.isHigherKinded
 
   /** The maximum depth of type `tp` */

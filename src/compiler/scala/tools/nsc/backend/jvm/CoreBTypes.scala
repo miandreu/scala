@@ -177,9 +177,6 @@ abstract class CoreBTypesFromSymbols[G <: Global] extends CoreBTypes {
   def                     juHashMapRef              : ClassBType = _juHashMapRef.get
   private[this] lazy val _juHashMapRef              : LazyVar[ClassBType] = runLazy(classBTypeFromSymbol(JavaUtilHashMap))           // java/util/HashMap
 
-  def                     sbScalaBeanInfoRef        : ClassBType = _sbScalaBeanInfoRef.get
-  private[this] lazy val _sbScalaBeanInfoRef        : LazyVar[ClassBType] = runLazy(classBTypeFromSymbol(requiredClass[scala.beans.ScalaBeanInfo]))
-
   def                     jliSerializedLambdaRef    : ClassBType = _jliSerializedLambdaRef.get
   private[this] lazy val _jliSerializedLambdaRef    : LazyVar[ClassBType] = runLazy(classBTypeFromSymbol(requiredClass[java.lang.invoke.SerializedLambda]))
 
@@ -351,9 +348,6 @@ abstract class CoreBTypesFromSymbols[G <: Global] extends CoreBTypes {
   def AndroidCreatorClass: Symbol = _AndroidCreatorClass.get
   private[this] lazy val _AndroidCreatorClass: LazyVar[Symbol] = runLazy(getClassIfDefined("android.os.Parcelable$Creator"))
 
-  def BeanInfoAttr: Symbol = _BeanInfoAttr.get
-  private[this] lazy val _BeanInfoAttr: LazyVar[Symbol] = runLazy(requiredClass[scala.beans.BeanInfo])
-
   /* The Object => String overload. */
   def String_valueOf: Symbol = _String_valueOf.get
   private[this] lazy val _String_valueOf: LazyVar[Symbol] = runLazy {
@@ -361,6 +355,11 @@ abstract class CoreBTypesFromSymbols[G <: Global] extends CoreBTypes {
       case List(pt) => pt.typeSymbol == ObjectClass
       case _        => false
     })
+  }
+
+  def SSymbol_apply: Symbol = _SSymbol_apply.get
+  private[this] lazy val _SSymbol_apply: LazyVar[Symbol] = runLazy {
+    getMember(SymbolModule, nme.apply)
   }
 
   def lambdaMetaFactoryMetafactoryHandle: Handle = _lambdaMetaFactoryMetafactoryHandle.get

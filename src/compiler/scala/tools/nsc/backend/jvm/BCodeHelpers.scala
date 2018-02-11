@@ -476,7 +476,6 @@ abstract class BCodeHelpers extends BCodeIdiomatic {
       */
     private def shouldEmitAnnotation(annot: AnnotationInfo) = {
       annot.symbol.initialize.isJavaDefined &&
-        annot.matches(ClassfileAnnotationClass) &&
         retentionPolicyOf(annot) != AnnotationRetentionPolicySourceValue &&
         annot.args.isEmpty
     }
@@ -710,34 +709,12 @@ abstract class BCodeHelpers extends BCodeIdiomatic {
 
   trait BCForwardersGen extends BCAnnotGen with BCJGenSigGen {
 
-    /* Adds a @remote annotation, actual use unknown.
-     *
-     * Invoked from genMethod() and addForwarder().
-     *
-     * must-single-thread
-     */
-    def addRemoteExceptionAnnot(isRemoteClass: Boolean, isJMethodPublic: Boolean, meth: Symbol) {
-      def hasThrowsRemoteException = meth.annotations.exists {
-        case ThrownException(exc) => exc.typeSymbol == definitions.RemoteExceptionClass
-        case _ => false
-      }
-      val needsAnnotation = {
-        (isRemoteClass ||
-          isRemote(meth) && isJMethodPublic
-          ) && !hasThrowsRemoteException
-      }
-      if (needsAnnotation) {
-        val c   = Constant(definitions.RemoteExceptionClass.tpe)
-        val arg = Literal(c) setType c.tpe
-        meth.addAnnotation(appliedType(definitions.ThrowsClass, c.tpe), arg)
-      }
-    }
 
     /* Add a forwarder for method m. Used only from addForwarders().
      *
      * must-single-thread
      */
-    private def addForwarder(isRemoteClass: Boolean, jclass: asm.ClassVisitor, moduleClass: Symbol, m: Symbol): Unit = {
+    private def addForwarder(jclass: asm.ClassVisitor, moduleClass: Symbol, m: Symbol): Unit = {
       def staticForwarderGenericSignature: String = {
         // scala/bug#3452 Static forwarder generation uses the same erased signature as the method if forwards to.
         // By rights, it should use the signature as-seen-from the module class, and add suitable
@@ -768,7 +745,7 @@ abstract class BCodeHelpers extends BCodeIdiomatic {
 
       // TODO needed? for(ann <- m.annotations) { ann.symbol.initialize }
       val jgensig = staticForwarderGenericSignature
-      addRemoteExceptionAnnot(isRemoteClass, hasPublicBitSet(flags), m)
+
       val (throws, others) = m.annotations partition (_.symbol == definitions.ThrowsClass)
       val thrownExceptions: List[String] = getExceptions(throws)
 
@@ -783,6 +760,7 @@ abstract class BCodeHelpers extends BCodeIdiomatic {
         mkArray(thrownExceptions)
       )
 
+      emitParamNames(mirrorMethod, m.info.params)
       emitAnnotations(mirrorMethod, others)
       emitParamAnnotations(mirrorMethod, m.info.params.map(_.annotations))
 
@@ -812,7 +790,7 @@ abstract class BCodeHelpers extends BCodeIdiomatic {
      *
      * must-single-thread
      */
-    def addForwarders(isRemoteClass: Boolean, jclass: asm.ClassVisitor, jclassName: String, moduleClass: Symbol) {
+    def addForwarders(jclass: asm.ClassVisitor, jclassName: String, moduleClass: Symbol) {
       assert(moduleClass.isModuleClass, moduleClass)
       debuglog(s"Dumping mirror class for object: $moduleClass")
 
@@ -831,7 +809,7 @@ abstract class BCodeHelpers extends BCodeIdiomatic {
           log(s"No forwarder for non-public member $m")
         else {
           log(s"Adding static forwarder for '$m' from $jclassName to '$moduleClass'")
-          addForwarder(isRemoteClass, jclass, moduleClass, m)
+          addForwarder(jclass, moduleClass, m)
         }
       }
     }
@@ -922,7 +900,7 @@ abstract class BCodeHelpers extends BCodeIdiomatic {
       mirrorClass.visitAttribute(if (ssa.isDefined) pickleMarkerLocal else pickleMarkerForeign)
       emitAnnotations(mirrorClass, moduleClass.annotations ++ ssa)
 
-      addForwarders(isRemote(moduleClass), mirrorClass, bType.internalName, moduleClass)
+      addForwarders(mirrorClass, bType.internalName, moduleClass)
 
       mirrorClass.visitEnd()
 
@@ -932,114 +910,6 @@ abstract class BCodeHelpers extends BCodeIdiomatic {
     }
 
   } // end of class JMirrorBuilder
-
-  /* builder of bean info classes */
-  class JBeanInfoBuilder extends BCInnerClassGen {
-
-    /*
-     * Generate a bean info class that describes the given class.
-     *
-     * @author Ross Judson (ross.judson@soletta.com)
-     *
-     * must-single-thread
-     */
-    def genBeanInfoClass(cls: Symbol, cunit: CompilationUnit, fieldSymbols: List[Symbol], methodSymbols: List[Symbol]): asm.tree.ClassNode = {
-
-      def javaSimpleName(s: Symbol): String = { s.javaSimpleName.toString }
-
-      val beanInfoType = beanInfoClassClassBType(cls)
-
-      val beanInfoClass = new asm.tree.ClassNode
-      beanInfoClass.visit(
-        backendUtils.classfileVersion.get,
-        beanInfoType.info.get.flags,
-        beanInfoType.internalName,
-        null, // no java-generic-signature
-        sbScalaBeanInfoRef.internalName,
-        EMPTY_STRING_ARRAY
-      )
-
-      beanInfoClass.visitSource(
-        cunit.source.toString,
-        null /* SourceDebugExtension */
-      )
-
-      var fieldList = List[String]()
-
-      for (f <- fieldSymbols if f.hasGetter;
-                 g = f.getterIn(cls);
-                 s = f.setterIn(cls);
-	         if g.isPublic && !(f.name startsWith "$")
-          ) {
-             // inserting $outer breaks the bean
-             fieldList = javaSimpleName(f) :: javaSimpleName(g) :: (if (s != NoSymbol) javaSimpleName(s) else null) :: fieldList
-      }
-
-      val methodList: List[String] =
-	     for (m <- methodSymbols
-	          if !m.isConstructor &&
-	          m.isPublic &&
-	          !(m.name startsWith "$") &&
-	          !m.isGetter &&
-	          !m.isSetter)
-       yield javaSimpleName(m)
-
-      val constructor = beanInfoClass.visitMethod(
-        asm.Opcodes.ACC_PUBLIC,
-        INSTANCE_CONSTRUCTOR_NAME,
-        "()V",
-        null, // no java-generic-signature
-        EMPTY_STRING_ARRAY // no throwable exceptions
-      )
-
-      val stringArrayJType: BType = ArrayBType(StringRef)
-      val conJType: BType = MethodBType(
-        classBTypeFromSymbol(definitions.ClassClass) :: stringArrayJType :: stringArrayJType :: Nil,
-        UNIT
-      )
-
-      def push(lst: List[String]) {
-        var fi = 0
-        for (f <- lst) {
-          constructor.visitInsn(asm.Opcodes.DUP)
-          constructor.visitLdcInsn(new java.lang.Integer(fi))
-          if (f == null) { constructor.visitInsn(asm.Opcodes.ACONST_NULL) }
-          else           { constructor.visitLdcInsn(f) }
-          constructor.visitInsn(StringRef.typedOpcode(asm.Opcodes.IASTORE))
-          fi += 1
-        }
-      }
-
-      constructor.visitCode()
-
-      constructor.visitVarInsn(asm.Opcodes.ALOAD, 0)
-      // push the class
-      constructor.visitLdcInsn(classBTypeFromSymbol(cls).toASMType)
-
-      // push the string array of field information
-      constructor.visitLdcInsn(new java.lang.Integer(fieldList.length))
-      constructor.visitTypeInsn(asm.Opcodes.ANEWARRAY, StringRef.internalName)
-      push(fieldList)
-
-      // push the string array of method information
-      constructor.visitLdcInsn(new java.lang.Integer(methodList.length))
-      constructor.visitTypeInsn(asm.Opcodes.ANEWARRAY, StringRef.internalName)
-      push(methodList)
-
-      // invoke the superclass constructor, which will do the
-      // necessary java reflection and create Method objects.
-      constructor.visitMethodInsn(asm.Opcodes.INVOKESPECIAL, "scala/beans/ScalaBeanInfo", INSTANCE_CONSTRUCTOR_NAME, conJType.descriptor, false)
-      constructor.visitInsn(asm.Opcodes.RETURN)
-
-      constructor.visitMaxs(0, 0) // just to follow protocol, dummy arguments
-      constructor.visitEnd()
-
-      beanInfoClass.visitEnd()
-
-      beanInfoClass
-    }
-
-  } // end of class JBeanInfoBuilder
 
   trait JAndroidBuilder {
     self: BCInnerClassGen =>
@@ -1165,21 +1035,34 @@ object BCodeHelpers {
   }
 
   /**
-   * Contains helpers around converting a Scala signature (array of bytes) into an array of `Long`.
-   *  Details about the storage format of pickles at the bytecode level (classfile annotations) can be found in SIP-10.
+   * Helpers for encoding a Scala signature (array of bytes) into a String or, if too large, an
+   * array of Strings.
+   *
+   * The encoding is as described in [[scala.reflect.internal.pickling.ByteCodecs]]. However, the
+   * special encoding of 0x00 as 0xC0 0x80 is not done here, as the resulting String(s) are passed
+   * as annotation argument to ASM, which will perform this step.
    */
-  class ScalaSigBytes(bytes: Array[Byte]) {
+  final class ScalaSigBytes(bytes: Array[Byte]) {
+    import scala.reflect.internal.pickling.ByteCodecs
+
     override def toString = (bytes map { byte => (byte & 0xff).toHexString }).mkString("[ ", " ", " ]")
-    lazy val sevenBitsMayBeZero: Array[Byte] = {
-      mapToNextModSevenBits(scala.reflect.internal.pickling.ByteCodecs.encode8to7(bytes))
-    }
+
+    /**
+     * The data in `bytes` mapped to 7-bit bytes and then each element incremented by 1 (modulo 0x80).
+     * This implements parts of the encoding documented in [[ByteCodecs]]. 0x00 values are NOT
+     * mapped to the overlong encoding (0xC0 0x80) but left as-is.
+     * When creating a String from this array and writing it to a classfile as annotation argument
+     * using ASM, the ASM library will replace 0x00 values by the overlong encoding. So the data in
+     * the classfile will have the format documented in [[ByteCodecs]].
+     */
+    lazy val sevenBitsMayBeZero: Array[Byte] = mapToNextModSevenBits(ByteCodecs.encode8to7(bytes))
 
     private def mapToNextModSevenBits(src: Array[Byte]): Array[Byte] = {
       var i = 0
       val srclen = src.length
       while (i < srclen) {
         val in = src(i)
-        src(i) = (if (in == 0x7f) 0.toByte else (in + 1).toByte)
+        src(i) = if (in == 0x7f) 0.toByte else (in + 1).toByte
         i += 1
       }
       src
@@ -1199,15 +1082,12 @@ object BCodeHelpers {
         if (sevenBitsMayBeZero(i) == 0) numZeros += 1
         i += 1
       }
-
       (sevenBitsMayBeZero.length + numZeros) <= 65535
     }
-    def strEncode: String = {
-      val ca = ubytesToCharArray(sevenBitsMayBeZero)
-      new java.lang.String(ca)
-    }
 
-    final def arrEncode: Array[String] = {
+    def strEncode: String = new java.lang.String(ubytesToCharArray(sevenBitsMayBeZero))
+
+    def arrEncode: Array[String] = {
       var strs: List[String]  = Nil
       val bSeven: Array[Byte] = sevenBitsMayBeZero
       // chop into slices of at most 65535 bytes, counting 0x00 as taking two bytes (as per JVMS 4.4.7 The CONSTANT_Utf8_info Structure)
@@ -1216,7 +1096,7 @@ object BCodeHelpers {
       var encLength  = 0
       while (offset < bSeven.length) {
         val deltaEncLength = if (bSeven(offset) == 0) 2 else 1
-        val newEncLength = encLength.toLong + deltaEncLength
+        val newEncLength = encLength + deltaEncLength
         if (newEncLength >= 65535) {
           val ba     = bSeven.slice(prevOffset, offset)
           strs     ::= new java.lang.String(ubytesToCharArray(ba))
@@ -1236,13 +1116,17 @@ object BCodeHelpers {
       strs.reverse.toArray
     }
 
+    /**
+     * Maps an array of bytes 1:1 to an array of characters, ensuring that each byte is 7-bit.
+     * Therefore no charset is required.
+     */
     private def ubytesToCharArray(bytes: Array[Byte]): Array[Char] = {
       val ca = new Array[Char](bytes.length)
       var idx = 0
       while(idx < bytes.length) {
         val b: Byte = bytes(idx)
         assert((b & ~0x7f) == 0)
-        ca(idx) = b.asInstanceOf[Char]
+        ca(idx) = b.toChar
         idx += 1
       }
       ca

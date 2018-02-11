@@ -9,11 +9,12 @@
 package scala.annotation
 
 /** A base class for classfile annotations. These are stored as
- *  [[http://docs.oracle.com/javase/7/docs/technotes/guides/language/annotations.html#_top Java annotations]]]
+ *  [[http://docs.oracle.com/javase/8/docs/technotes/guides/language/annotations.html Java annotations]]]
  *  in classfiles.
  *
  *  @author  Martin Odersky
  *  @version 1.1, 2/02/2007
  *  @since 2.4
  */
-trait ClassfileAnnotation extends StaticAnnotation
+@deprecated("Annotation classes need to be written in Java in order to be stored in classfiles in a Java-compatible manner", "2.13.0")
+trait ClassfileAnnotation extends ConstantAnnotation

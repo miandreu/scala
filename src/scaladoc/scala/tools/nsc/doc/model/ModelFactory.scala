@@ -30,12 +30,7 @@ class ModelFactory(val global: Global, val settings: doc.Settings) {
   import global._
   import definitions.{ ObjectClass, NothingClass, AnyClass, AnyValClass, AnyRefClass }
   import rootMirror.{ RootPackage, EmptyPackage }
-
-  // Defaults for member grouping, that may be overridden by the template
-  val defaultGroup = "Ungrouped"
-  val defaultGroupName = "Ungrouped"
-  val defaultGroupDesc = None
-  val defaultGroupPriority = 1000
+  import ModelFactory._
 
   def templatesCount = docTemplatesCache.count(_._2.isDocTemplate) - droppedPackages.size
 
@@ -284,11 +279,13 @@ class ModelFactory(val global: Global, val settings: doc.Settings) {
 
     protected def reprSymbol: Symbol = sym
 
-    def inSource =
-      if (reprSymbol.sourceFile != null && ! reprSymbol.isSynthetic)
-        Some((reprSymbol.sourceFile, reprSymbol.pos.line))
+    def inSource = {
+      val sourceFile = reprSymbol.sourceFile
+      if (sourceFile != null && !reprSymbol.isSynthetic)
+        Some((sourceFile, reprSymbol.pos.line))
       else
         None
+    }
 
     def sourceUrl = {
       def fixPath(s: String) = s.replaceAll("\\" + java.io.File.separator, "/")
@@ -883,8 +880,9 @@ class ModelFactory(val global: Global, val settings: doc.Settings) {
       override val name = newName
       def defaultValue =
         if (aSym.hasDefault) {
+          val sourceFile = aSym.sourceFile
           // units.filter should return only one element
-          (currentRun.units filter (_.source.file == aSym.sourceFile)).toList match {
+          (currentRun.units filter (_.source.file == sourceFile)).toList match {
             case List(unit) =>
               // scala/bug#4922 `sym == aSym` is insufficient if `aSym` is a clone of symbol
               //         of the parameter in the tree, as can happen with type parameterized methods.
@@ -909,15 +907,12 @@ class ModelFactory(val global: Global, val settings: doc.Settings) {
 
   /** */
   def makeTypeInTemplateContext(aType: Type, inTpl: TemplateImpl, dclSym: Symbol): TypeEntity = {
-    def ownerTpl(sym: Symbol): Symbol =
-      if (sym.isClass || sym.isModule || sym == NoSymbol) sym else ownerTpl(sym.owner)
-    val tpe =
-      if (thisFactory.settings.useStupidTypes) aType else {
-        def ownerTpl(sym: Symbol): Symbol =
-          if (sym.isClass || sym.isModule || sym == NoSymbol) sym else ownerTpl(sym.owner)
-        val fixedSym = if (inTpl.sym.isModule) inTpl.sym.moduleClass else inTpl.sym
-        aType.asSeenFrom(fixedSym.thisType, ownerTpl(dclSym))
-      }
+    val tpe = {
+      def ownerTpl(sym: Symbol): Symbol =
+        if (sym.isClass || sym.isModule || sym == NoSymbol) sym else ownerTpl(sym.owner)
+      val fixedSym = if (inTpl.sym.isModule) inTpl.sym.moduleClass else inTpl.sym
+      aType.asSeenFrom(fixedSym.thisType, ownerTpl(dclSym))
+    }
     makeType(tpe, inTpl)
   }
 
@@ -1028,4 +1023,11 @@ class ModelFactory(val global: Global, val settings: doc.Settings) {
     (bSym.isAliasType || bSym.isAbstractType) &&
     { val rawComment = global.expandedDocComment(bSym, inTpl.sym)
       rawComment.contains("@template") || rawComment.contains("@documentable") }
+}
+object ModelFactory {
+  // Defaults for member grouping, that may be overridden by the template
+  val defaultGroup = "Ungrouped"
+  val defaultGroupName = "Ungrouped"
+  val defaultGroupDesc = None
+  val defaultGroupPriority = 1000
 }

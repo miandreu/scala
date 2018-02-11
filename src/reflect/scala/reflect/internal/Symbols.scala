@@ -869,10 +869,13 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     /** Conditions where we omit the prefix when printing a symbol, to avoid
      *  unpleasantries like Predef.String, $iw.$iw.Foo and <empty>.Bippy.
      */
-    final def isOmittablePrefix = /*!settings.debug.value &&*/ (
-         UnqualifiedOwners(skipPackageObject)
-      || isEmptyPrefix
-    )
+    final def isOmittablePrefix = /*!settings.debug.value &&*/ {
+      // scala/bug#5941 runtime reflection can have distinct symbols representing `package scala` (from different mirrors)
+      // We check equality by FQN here to make sure we omit prefixes uniformly for all of them.
+      def matches(sym1: Symbol, sym2: Symbol) = (sym1 eq sym2) || (sym1.hasPackageFlag && sym2.hasPackageFlag && sym1.name == sym2.name && sym1.fullNameString == sym2.fullNameString)
+      val skipped = skipPackageObject
+      UnqualifiedOwners.exists((sym: Symbol) => matches(sym, skipped)) || isEmptyPrefix
+    }
     def isEmptyPrefix = (
          isEffectiveRoot                      // has no prefix for real, <empty> or <root>
       || isAnonOrRefinementClass              // has uninteresting <anon> or <refinement> prefix
@@ -897,7 +900,6 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
 
     def isStrictFP             = hasAnnotation(ScalaStrictFPAttr) || (enclClass hasAnnotation ScalaStrictFPAttr)
     def isSerializable         = info.baseClasses.exists(p => p == SerializableClass || p == JavaSerializableClass)
-    def hasBridgeAnnotation    = hasAnnotation(BridgeClass)
     def isDeprecated           = hasAnnotation(DeprecatedAttr)
     def deprecationMessage     = getAnnotation(DeprecatedAttr) flatMap (_ stringArg 0)
     def deprecationVersion     = getAnnotation(DeprecatedAttr) flatMap (_ stringArg 1)
@@ -1014,7 +1016,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
 
     /** Is this symbol effectively final? I.e, it cannot be overridden */
     final def isEffectivelyFinal: Boolean = (
-         (this hasFlag FINAL | PACKAGE)
+         ((this hasFlag FINAL | PACKAGE) && this != SingletonClass)
       || isModuleOrModuleClass && (isTopLevel || !settings.overrideObjects)
       || isTerm && (isPrivate || isLocalToBlock || (hasAllFlags(notPRIVATE | METHOD) && !hasFlag(DEFERRED)))
       || isClass && originalOwner.isTerm && children.isEmpty // we track known subclasses of term-owned classes, use that infer finality
@@ -2206,30 +2208,30 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
       else if (isMethod || isClass || this == NoSymbol) this
       else owner.logicallyEnclosingMember
 
-    /** The top-level class containing this symbol. */
+    /** The top-level class containing this symbol, using the current owner chain. */
     def enclosingTopLevelClass: Symbol =
       if (isTopLevel) {
         if (isClass) this else moduleClass
       } else owner.enclosingTopLevelClass
 
-    /** The top-level class or local dummy symbol containing this symbol. */
-    def enclosingTopLevelClassOrDummy: Symbol =
+    /** The top-level class or local dummy symbol containing this symbol, using the original owner chain. */
+    def originalEnclosingTopLevelClassOrDummy: Symbol =
       if (isTopLevel) {
         if (isClass) this else moduleClass.orElse(this)
-      } else owner.enclosingTopLevelClassOrDummy
+      } else originalOwner.originalEnclosingTopLevelClassOrDummy
 
     /** Is this symbol defined in the same scope and compilation unit as `that` symbol? */
-    def isCoDefinedWith(that: Symbol) = (
-         !rawInfoIsNoType
-      && (this.effectiveOwner == that.effectiveOwner)
-      && (   !this.effectiveOwner.isPackageClass
-          || (this.associatedFile eq NoAbstractFile)
-          || (that.associatedFile eq NoAbstractFile)
-          || (this.associatedFile.path == that.associatedFile.path)  // Cheap possibly wrong check, then expensive normalization
-          || (this.associatedFile.canonicalPath == that.associatedFile.canonicalPath)
-         )
-    )
-
+    def isCoDefinedWith(that: Symbol) = {
+      !rawInfoIsNoType                               &&
+        (this.effectiveOwner == that.effectiveOwner) &&
+        (!this.effectiveOwner.isPackageClass             || { val thisFile = this.associatedFile
+          (thisFile eq NoAbstractFile)                   || { val thatFile = that.associatedFile
+          (thatFile eq NoAbstractFile)                   ||
+          (thisFile.path == thatFile.path)               ||      // Cheap possibly wrong check
+          (thisFile.canonicalPath == thatFile.canonicalPath)
+          }}
+          )
+    }
     /** The internal representation of classes and objects:
      *
      *  class Foo is "the class" or sometimes "the plain class"
@@ -2509,8 +2511,10 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     // file to also store the classfile, but without changing the behavior
     // of sourceFile (which is expected at least in the IDE only to
     // return actual source code.) So sourceFile has classfiles filtered out.
-    final def sourceFile: AbstractFile =
-      if ((associatedFile eq NoAbstractFile) || (associatedFile.path endsWith ".class")) null else associatedFile
+    final def sourceFile: AbstractFile = {
+      val file = associatedFile
+      if ((file eq NoAbstractFile) || (file.path endsWith ".class")) null else file
+    }
 
     /** Overridden in ModuleSymbols to delegate to the module class.
      *  Never null; if there is no associated file, returns NoAbstractFile.
@@ -3553,7 +3557,7 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
     override def enclClassChain = Nil
     override def enclClass: Symbol = this
     override def enclosingTopLevelClass: Symbol = this
-    override def enclosingTopLevelClassOrDummy: Symbol = this
+    override def originalEnclosingTopLevelClassOrDummy: Symbol = this
     override def enclosingPackageClass: Symbol = this
     override def enclMethod: Symbol = this
     override def associatedFile = NoAbstractFile
@@ -3718,6 +3722,21 @@ trait Symbols extends api.Symbols { self: SymbolTable =>
   def allSymbolsHaveOwner(syms: List[Symbol], owner: Symbol): Boolean = syms match {
     case sym :: rest => sym.owner == owner && allSymbolsHaveOwner(rest, owner)
     case _           => true
+  }
+
+  private[scala] final def argsDependOnPrefix(sym: Symbol): Boolean = {
+    val tt = sym.owner.thisType
+
+    @annotation.tailrec
+    def loop(mt: Type): Boolean = {
+      mt match {
+        case MethodType(params, restpe) => params.exists(_.info.exists(_ == tt)) || loop(restpe)
+        case PolyType(tparams, restpe) => loop(restpe)
+        case _ => false
+      }
+    }
+
+    tt.isInstanceOf[SingletonType] && loop(sym.info)
   }
 
 // -------------- Completion --------------------------------------------------------

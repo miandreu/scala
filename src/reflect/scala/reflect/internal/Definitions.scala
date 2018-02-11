@@ -277,6 +277,7 @@ trait Definitions extends api.StandardDefinitions {
     lazy val SerializableTpe = SerializableClass.tpe
     lazy val StringTpe       = StringClass.tpe
     lazy val ThrowableTpe    = ThrowableClass.tpe
+    lazy val SymbolTpe       = SymbolClass.tpe
 
     lazy val ConstantTrue  = ConstantType(Constant(true))
     lazy val ConstantFalse = ConstantType(Constant(false))
@@ -376,8 +377,6 @@ trait Definitions extends api.StandardDefinitions {
     lazy val JavaCloneableClass    = requiredClass[java.lang.Cloneable]
     lazy val JavaNumberClass       = requiredClass[java.lang.Number]
     lazy val JavaEnumClass         = requiredClass[java.lang.Enum[_]]
-    lazy val RemoteInterfaceClass  = requiredClass[java.rmi.Remote]
-    lazy val RemoteExceptionClass  = requiredClass[java.rmi.RemoteException]
     lazy val JavaUtilMap           = requiredClass[java.util.Map[_, _]]
     lazy val JavaUtilHashMap       = requiredClass[java.util.HashMap[_, _]]
 
@@ -526,6 +525,8 @@ trait Definitions extends api.StandardDefinitions {
     lazy val MacroImplAnnotation          = requiredClass[scala.reflect.macros.internal.macroImpl]
 
     lazy val StringContextClass           = requiredClass[scala.StringContext]
+
+    lazy val ValueOfClass                 = getClassIfDefined("scala.ValueOf")
 
     // scala/bug#8392 a reflection universe on classpath may not have
     // quasiquotes, if e.g. crosstyping with -Xsource on
@@ -1113,7 +1114,7 @@ trait Definitions extends api.StandardDefinitions {
 
     // Annotation base classes
     lazy val AnnotationClass            = requiredClass[scala.annotation.Annotation]
-    lazy val ClassfileAnnotationClass   = requiredClass[scala.annotation.ClassfileAnnotation]
+    lazy val ConstantAnnotationClass    = getClassIfDefined("scala.annotation.ConstantAnnotation")
     lazy val StaticAnnotationClass      = requiredClass[scala.annotation.StaticAnnotation]
 
     // Java retention annotations
@@ -1121,7 +1122,6 @@ trait Definitions extends api.StandardDefinitions {
     lazy val AnnotationRetentionPolicyAttr = requiredClass[java.lang.annotation.RetentionPolicy]
 
     // Annotations
-    lazy val BridgeClass                = requiredClass[scala.annotation.bridge]
     lazy val ElidableMethodClass        = requiredClass[scala.annotation.elidable]
     lazy val ImplicitNotFoundClass      = requiredClass[scala.annotation.implicitNotFound]
     lazy val ImplicitAmbiguousClass     = getClassIfDefined("scala.annotation.implicitAmbiguous")
@@ -1141,7 +1141,6 @@ trait Definitions extends api.StandardDefinitions {
     lazy val DeprecatedInheritanceAttr  = requiredClass[scala.deprecatedInheritance]
     lazy val DeprecatedOverridingAttr   = requiredClass[scala.deprecatedOverriding]
     lazy val NativeAttr                 = requiredClass[scala.native]
-    lazy val RemoteAttr                 = requiredClass[scala.remote]
     lazy val ScalaInlineClass           = requiredClass[scala.inline]
     lazy val ScalaNoInlineClass         = requiredClass[scala.noinline]
     lazy val SerialVersionUIDAttr       = requiredClass[scala.SerialVersionUID]
@@ -1387,7 +1386,7 @@ trait Definitions extends api.StandardDefinitions {
       else boxedClass.map(kvp => (kvp._2: Symbol, kvp._1)).getOrElse(sym, NoSymbol)
 
     /** Is type's symbol a numeric value class? */
-    def isNumericValueType(tp: Type): Boolean = tp match {
+    def isNumericValueType(tp: Type): Boolean = tp.widen match {
       case TypeRef(_, sym, _) => isNumericValueClass(sym)
       case _                  => false
     }

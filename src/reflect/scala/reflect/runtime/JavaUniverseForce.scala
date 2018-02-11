@@ -152,6 +152,8 @@ trait JavaUniverseForce { self: runtime.JavaUniverse  =>
     this.RefinedType
     this.ClassInfoType
     this.ConstantType
+    this.FoldableConstantType
+    this.LiteralType
     this.TypeRef
     this.MethodType
     this.NullaryMethodType
@@ -218,6 +220,7 @@ trait JavaUniverseForce { self: runtime.JavaUniverse  =>
     definitions.SerializableTpe
     definitions.StringTpe
     definitions.ThrowableTpe
+    definitions.SymbolTpe
     definitions.ConstantTrue
     definitions.ConstantFalse
     definitions.ConstantNull
@@ -261,8 +264,6 @@ trait JavaUniverseForce { self: runtime.JavaUniverse  =>
     definitions.JavaCloneableClass
     definitions.JavaNumberClass
     definitions.JavaEnumClass
-    definitions.RemoteInterfaceClass
-    definitions.RemoteExceptionClass
     definitions.JavaUtilMap
     definitions.JavaUtilHashMap
     definitions.ByNameParamClass
@@ -319,6 +320,7 @@ trait JavaUniverseForce { self: runtime.JavaUniverse  =>
     definitions.WhiteboxContextClass
     definitions.MacroImplAnnotation
     definitions.StringContextClass
+    definitions.ValueOfClass
     definitions.QuasiquoteClass
     definitions.QuasiquoteClass_api
     definitions.QuasiquoteClass_api_apply
@@ -376,11 +378,10 @@ trait JavaUniverseForce { self: runtime.JavaUniverse  =>
     definitions.BoxedUnitClass
     definitions.BoxedUnitModule
     definitions.AnnotationClass
-    definitions.ClassfileAnnotationClass
+    definitions.ConstantAnnotationClass
     definitions.StaticAnnotationClass
     definitions.AnnotationRetentionAttr
     definitions.AnnotationRetentionPolicyAttr
-    definitions.BridgeClass
     definitions.ElidableMethodClass
     definitions.ImplicitNotFoundClass
     definitions.ImplicitAmbiguousClass
@@ -399,7 +400,6 @@ trait JavaUniverseForce { self: runtime.JavaUniverse  =>
     definitions.DeprecatedInheritanceAttr
     definitions.DeprecatedOverridingAttr
     definitions.NativeAttr
-    definitions.RemoteAttr
     definitions.ScalaInlineClass
     definitions.ScalaNoInlineClass
     definitions.SerialVersionUIDAttr

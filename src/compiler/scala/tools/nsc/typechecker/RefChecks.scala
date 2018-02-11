@@ -550,7 +550,7 @@ abstract class RefChecks extends Transform {
         }
 
         def checkOverrideDeprecated() {
-          if (other.hasDeprecatedOverridingAnnotation && !(member.hasDeprecatedOverridingAnnotation || member.ownerChain.exists(x => x.isDeprecated || x.hasBridgeAnnotation))) {
+          if (other.hasDeprecatedOverridingAnnotation && !(member.hasDeprecatedOverridingAnnotation || member.ownerChain.exists(_.isDeprecated))) {
             val version = other.deprecatedOverridingVersion.getOrElse("")
             val since   = if (version.isEmpty) version else s" (since $version)"
             val message = other.deprecatedOverridingMessage map (msg => s": $msg") getOrElse ""
@@ -1235,8 +1235,7 @@ abstract class RefChecks extends Transform {
     private def checkUndesiredProperties(sym: Symbol, pos: Position) {
       // If symbol is deprecated, and the point of reference is not enclosed
       // in either a deprecated member or a scala bridge method, issue a warning.
-      // TODO: x.hasBridgeAnnotation doesn't seem to be needed here...
-      if (sym.isDeprecated && !currentOwner.ownerChain.exists(x => x.isDeprecated || x.hasBridgeAnnotation))
+      if (sym.isDeprecated && !currentOwner.ownerChain.exists(x => x.isDeprecated))
         currentRun.reporting.deprecationWarning(pos, sym)
 
       // Similar to deprecation: check if the symbol is marked with @migration
@@ -1561,7 +1560,7 @@ abstract class RefChecks extends Transform {
         if (t == EmptyTree) Literal(Constant(())).setPos(tree.pos).setType(UnitTpe) else t
 
       cond.tpe match {
-        case ConstantType(value) =>
+        case FoldableConstantType(value) =>
           val res = if (value.booleanValue) thenpart else elsepart
           unitIfEmpty(res)
         case _ => tree

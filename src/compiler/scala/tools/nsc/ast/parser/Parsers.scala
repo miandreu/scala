@@ -702,11 +702,11 @@ self =>
 
     def isExprIntro: Boolean = isExprIntroToken(in.token)
 
-    def isTypeIntroToken(token: Token): Boolean = token match {
+    def isTypeIntroToken(token: Token): Boolean = (isLiteralToken(token) && token != NULL) || (token match {
       case IDENTIFIER | BACKQUOTED_IDENT | THIS |
            SUPER | USCORE | LPAREN | AT => true
       case _ => false
-    }
+    })
 
     def isStatSeqEnd = in.token == RBRACE || in.token == EOF
 
@@ -1015,21 +1015,30 @@ self =>
        *                     |  SimpleType `#' Id
        *                     |  StableId
        *                     |  Path `.' type
+       *                     |  Literal
        *                     |  `(' Types `)'
        *                     |  WildcardType
        *  }}}
        */
       def simpleType(): Tree = {
-        val start = in.offset
-        simpleTypeRest(in.token match {
-          case LPAREN   => atPos(start)(makeSafeTupleType(inParens(types()), start))
-          case USCORE   => wildcardType(in.skipToken())
-          case _        =>
-            path(thisOK = false, typeOK = true) match {
-              case r @ SingletonTypeTree(_) => r
-              case r => convertToTypeId(r)
-            }
-        })
+        if (isLiteralToken(in.token) && in.token != NULL)
+          atPos(in.offset){SingletonTypeTree(literal())}
+        else if (in.name == raw.MINUS && lookingAhead(isNumericLit)) {
+          val start = in.offset
+          in.nextToken()
+          atPos(start){ SingletonTypeTree(literal(isNegated = true, start = start)) }
+        } else {
+          val start = in.offset
+          simpleTypeRest(in.token match {
+            case LPAREN   => atPos(start)(makeSafeTupleType(inParens(types()), start))
+            case USCORE   => wildcardType(in.skipToken())
+            case _        =>
+              path(thisOK = false, typeOK = true) match {
+                case r @ SingletonTypeTree(_) => r
+                case r => convertToTypeId(r)
+              }
+          })
+        }
       }
 
       private def typeProjection(t: Tree): Tree = {
@@ -1261,9 +1270,7 @@ self =>
      */
     def literal(isNegated: Boolean = false, inPattern: Boolean = false, start: Offset = in.offset): Tree = atPos(start) {
       def finish(value: Any): Tree = try newLiteral(value) finally in.nextToken()
-      if (in.token == SYMBOLLIT)
-        Apply(scalaDot(nme.Symbol), List(finish(in.strVal)))
-      else if (in.token == INTERPOLATIONID)
+      if (in.token == INTERPOLATIONID)
         interpolatedString(inPattern = inPattern)
       else finish(in.token match {
         case CHARLIT                => in.charVal
@@ -1272,6 +1279,7 @@ self =>
         case FLOATLIT               => in.floatVal(isNegated)
         case DOUBLELIT              => in.doubleVal(isNegated)
         case STRINGLIT | STRINGPART => in.strVal.intern()
+        case SYMBOLLIT              => Symbol(in.strVal.intern())
         case TRUE                   => true
         case FALSE                  => false
         case NULL                   => null
@@ -2607,6 +2615,11 @@ self =>
           if (!tp.isEmpty && newmods.isMutable &&
               (lhs.toList forall (_.isInstanceOf[Ident])) && in.token == USCORE) {
             in.nextToken()
+            tp match {
+              case SingletonTypeTree(Literal(Constant(_))) =>
+                syntaxError(tp.pos, "default initialization prohibited for literal-typed vars", skipIt = false)
+              case _ =>
+            }
             newmods = newmods | Flags.DEFAULTINIT
             EmptyTree
           } else {
@@ -2886,9 +2899,8 @@ self =>
       val name = ident()
       val tstart = in.offset
       atPos(start, if (name == nme.ERROR) start else nameOffset) {
-        val mods1 = if (in.token == SUBTYPE) mods | Flags.DEFERRED else mods
-        val template = templateOpt(mods1, name, NoMods, Nil, tstart)
-        ModuleDef(mods1, name.toTermName, template)
+        val template = templateOpt(mods, name, NoMods, Nil, tstart)
+        ModuleDef(mods, name.toTermName, template)
       }
     }
 
@@ -2990,13 +3002,17 @@ self =>
 
     /** {{{
      *  ClassTemplateOpt ::= `extends' ClassTemplate | [[`extends'] TemplateBody]
-     *  TraitTemplateOpt ::= TraitExtends TraitTemplate | [[`extends'] TemplateBody] | `<:' TemplateBody
-     *  TraitExtends     ::= `extends' | `<:'
+     *  TraitTemplateOpt ::= TraitExtends TraitTemplate | [[TraitExtends] TemplateBody]
+     *  TraitExtends     ::= `extends' | `<:' (deprecated)
      *  }}}
      */
     def templateOpt(mods: Modifiers, name: Name, constrMods: Modifiers, vparamss: List[List[ValDef]], tstart: Offset): Template = {
+      def deprecatedUsage(): Boolean = {
+        deprecationWarning(in.offset, "Using `<:` for `extends` is deprecated", since = "2.12.5")
+        true
+      }
       val (parents, self, body) = (
-        if (in.token == EXTENDS || in.token == SUBTYPE && mods.isTrait) {
+        if (in.token == EXTENDS || in.token == SUBTYPE && mods.isTrait && deprecatedUsage()) {
           in.nextToken()
           template()
         }
@@ -3217,11 +3233,12 @@ self =>
      *  }}}
      */
     def blockStatSeq(): List[Tree] = checkNoEscapingPlaceholders {
+      def acceptStatSepOptOrEndCase() = if (!isCaseDefEnd) acceptStatSepOpt()
       val stats = new ListBuffer[Tree]
       while (!isStatSeqEnd && !isCaseDefEnd) {
         if (in.token == IMPORT) {
           stats ++= importClause()
-          acceptStatSepOpt()
+          acceptStatSepOptOrEndCase()
         }
         else if (isDefIntro || isLocalModifier || isAnnotation) {
           if (in.token == IMPLICIT) {
@@ -3231,11 +3248,11 @@ self =>
           } else {
             stats ++= localDef(0)
           }
-          acceptStatSepOpt()
+          acceptStatSepOptOrEndCase()
         }
         else if (isExprIntro) {
           stats += statement(InBlock)
-          if (!isCaseDefEnd) acceptStatSep()
+          acceptStatSepOptOrEndCase()
         }
         else if (isStatSep) {
           in.nextToken()
